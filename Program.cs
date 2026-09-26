@@ -31,7 +31,9 @@ builder.Services.AddScoped<IProductService, ProductService>();
 builder.Services.Configure<StripeOptions>(
     builder.Configuration.GetSection("Stripe"));
 
-builder.Services.AddScoped<StripePaymentService>();
+builder.Services.AddScoped<
+    IStripePaymentService,
+    StripePaymentService>();
 
 builder.Services.AddScoped<ICustomerService, CustomerService>();
 builder.Services.AddScoped<IAuthService, AuthService>();

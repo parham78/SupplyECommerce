@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using Stripe;
 
-public class StripePaymentService
+public class StripePaymentService : IStripePaymentService
 {
     private readonly PaymentIntentService _paymentIntentService;
 

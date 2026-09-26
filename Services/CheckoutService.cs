@@ -4,12 +4,12 @@ public class CheckoutService : ICheckoutService
 {
     private readonly OrderManagementDbContext _context;
     private readonly ICurrentUserService _currentUserService;
-    private readonly StripePaymentService _stripePaymentService;
+    private readonly IStripePaymentService _stripePaymentService;
 
     public CheckoutService(
         OrderManagementDbContext context,
         ICurrentUserService currentUserService,
-        StripePaymentService stripePaymentService)
+        IStripePaymentService stripePaymentService)
     {
         _context = context;
         _currentUserService = currentUserService;
