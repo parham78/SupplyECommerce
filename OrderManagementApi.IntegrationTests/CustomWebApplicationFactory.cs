@@ -50,6 +50,9 @@ public class CustomWebApplicationFactory
 
         builder.ConfigureServices(services =>
         {
+            services.RemoveAll<IStripePaymentService>();
+            services.AddScoped<IStripePaymentService, FakeStripePaymentService>();
+
             services.RemoveAll<
                 DbContextOptions<OrderManagementDbContext>>();
 

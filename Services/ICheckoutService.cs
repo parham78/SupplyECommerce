@@ -1,5 +1,5 @@
 public interface ICheckoutService
 {
-    Task<OrderResponseDto> Checkout(
+    Task<CheckoutResponseDto> Checkout(
         CheckoutRequestDto dto);
 }

@@ -13,40 +13,6 @@
 
       <a routerLink="/basket"> Return to basket </a>
     </div>
-  } @else if (order(); as completedOrder) {
-    <div class="checkout-success">
-      <div class="checkout-success__mark">✓</div>
-
-      <p class="checkout-eyebrow">Order confirmed</p>
-
-      <h1>Thank you, {{ completedOrder.customerName }}.</h1>
-
-      <p class="checkout-success__message">Your order has been created successfully.</p>
-
-      <div class="checkout-success__details">
-        <div>
-          <span>Order</span>
-          <strong>#{{ completedOrder.id }}</strong>
-        </div>
-
-        <div>
-          <span>Status</span>
-          <strong>{{ completedOrder.status }}</strong>
-        </div>
-
-        <div>
-          <span>Total</span>
-
-          <strong>
-            {{ completedOrder.totalPrice | currency: 'CAD' }}
-          </strong>
-        </div>
-      </div>
-
-      <div class="checkout-success__actions">
-        <a class="button button--primary" routerLink="/products"> Continue shopping </a>
-      </div>
-    </div>
   } @else {
     @if (basket(); as currentBasket) {
       @if (currentBasket.items.length === 0) {
@@ -66,7 +32,10 @@
 
             <h1>Review your order.</h1>
 
-            <p>Confirm your shipping address and review your items before placing the order.</p>
+            <p>
+              Confirm your shipping address, review your items, and complete payment securely with
+              Stripe.
+            </p>
           </div>
 
           <a class="checkout-header__back" routerLink="/basket"> ← Back to basket </a>
@@ -89,7 +58,9 @@
                     </span>
                   }
 
-                  <a routerLink="/addresses"> Manage addresses </a>
+                  @if (!checkout()) {
+                    <a routerLink="/addresses"> Manage addresses </a>
+                  }
                 </div>
               </div>
 
@@ -112,6 +83,7 @@
                         type="radio"
                         name="shippingAddress"
                         [checked]="selectedAddressId() === address.id"
+                        [disabled]="checkout() !== null"
                         (change)="selectAddress(address.id)"
                       />
 
@@ -134,6 +106,7 @@
 
                         @if (address.addressLine2) {
                           <br />
+
                           {{ address.addressLine2 }}
                         }
 
@@ -204,6 +177,27 @@
                 }
               </div>
             </section>
+
+            @if (checkout(); as checkoutData) {
+              <section class="checkout-panel">
+                <div class="checkout-panel__heading">
+                  <div>
+                    <span class="checkout-step"> 03 </span>
+
+                    <h2>Payment</h2>
+                  </div>
+
+                  <span class="checkout-panel__selected"> Order #{{ checkoutData.order.id }} </span>
+                </div>
+
+                <p>Your order has been created and is waiting for payment.</p>
+
+                <app-stripe-payment-element
+                  [clientSecret]="checkoutData.clientSecret"
+                  [publishableKey]="stripePublishableKey"
+                />
+              </section>
+            }
           </div>
 
           <aside class="checkout-summary">
@@ -212,7 +206,7 @@
             <h2>Your total</h2>
 
             <div class="checkout-summary__row">
-              <span>Products</span>
+              <span> Products </span>
 
               <strong>
                 {{ currentBasket.totalPrice | currency: 'CAD' }}
@@ -220,12 +214,13 @@
             </div>
 
             <div class="checkout-summary__row">
-              <span>Shipping</span>
-              <span>Calculated later</span>
+              <span> Shipping </span>
+
+              <span> Calculated later </span>
             </div>
 
             <div class="checkout-summary__total">
-              <span>Total</span>
+              <span> Total </span>
 
               <strong>
                 {{ currentBasket.totalPrice | currency: 'CAD' }}
@@ -238,27 +233,34 @@
               </div>
             }
 
-            <button
-              type="button"
-              class="checkout-submit"
-              [disabled]="selectedAddressId() === null || isSubmitting()"
-              (click)="placeOrder()"
-            >
-              @if (isSubmitting()) {
-                Placing order...
-              } @else {
-                Place order
-                <span aria-hidden="true">→</span>
-              }
-            </button>
+            @if (!checkout()) {
+              <button
+                type="button"
+                class="checkout-submit"
+                [disabled]="selectedAddressId() === null || isSubmitting()"
+                (click)="placeOrder()"
+              >
+                @if (isSubmitting()) {
+                  Preparing payment...
+                } @else {
+                  Continue to payment
 
-            @if (addresses().length === 0) {
-              <p class="checkout-summary__note">
-                Add a shipping address before placing your order.
-              </p>
+                  <span aria-hidden="true"> → </span>
+                }
+              </button>
+
+              @if (addresses().length === 0) {
+                <p class="checkout-summary__note">
+                  Add a shipping address before continuing to payment.
+                </p>
+              } @else {
+                <p class="checkout-summary__note">
+                  Your order will be created as pending before payment begins.
+                </p>
+              }
             } @else {
               <p class="checkout-summary__note">
-                Your basket will only be cleared after checkout succeeds.
+                Complete the secure payment form to pay for this order.
               </p>
             }
           </aside>

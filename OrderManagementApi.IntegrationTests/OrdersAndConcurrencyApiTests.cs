@@ -565,18 +565,21 @@ public class OrdersAndConcurrencyApiTests
             HttpStatusCode.OK,
             checkoutResponse.StatusCode);
 
-        var order =
+        var checkout =
             await checkoutResponse.Content
-                .ReadFromJsonAsync<OrderResponseDto>(
+                .ReadFromJsonAsync<CheckoutResponseDto>(
                     JsonOptions);
 
-        Assert.NotNull(order);
+        Assert.NotNull(checkout);
+        Assert.NotNull(checkout.Order);
+        Assert.True(checkout.Order.Id > 0);
+        Assert.False(string.IsNullOrWhiteSpace(checkout.ClientSecret));
 
         return new CheckoutScenario(
             token,
             email,
             productId,
-            order.Id);
+            checkout.Order.Id);
     }
 
     private async Task<

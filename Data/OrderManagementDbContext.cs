@@ -163,6 +163,19 @@ public class OrderManagementDbContext
             .Property(o => o.ShippingPhoneNumber)
             .HasMaxLength(30);
 
+        modelBuilder.Entity<Order>()
+    .Property(o => o.PaymentStatus)
+    .HasConversion<string>()
+    .HasMaxLength(20)
+    .HasDefaultValue(PaymentStatus.NotTracked);
+        modelBuilder.Entity<Order>()
+        .Property(o => o.StripePaymentIntentId)
+        .HasMaxLength(255);
+        modelBuilder.Entity<Order>()
+        .HasIndex(o => o.StripePaymentIntentId)
+        .IsUnique()
+        .HasFilter("[StripePaymentIntentId] IS NOT NULL");
+
         // OrderItem historical price
         modelBuilder.Entity<OrderItem>()
             .Property(oi => oi.UnitPrice)

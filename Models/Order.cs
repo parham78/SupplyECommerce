@@ -27,4 +27,10 @@ public class Order
     public string? ShippingCountry { get; set; }
 
     public string? ShippingPhoneNumber { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    = PaymentStatus.NotTracked;
+
+    public string? StripePaymentIntentId { get; set; }
+
+    public DateTime? PaidAt { get; set; }
 }

@@ -15,11 +15,12 @@ public class MeCheckoutController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<OrderResponseDto>> Checkout(
+    public async Task<ActionResult<CheckoutResponseDto>> Checkout(
         CheckoutRequestDto dto)
     {
-        var order = await _checkoutService.Checkout(dto);
+        var result =
+            await _checkoutService.Checkout(dto);
 
-        return Ok(order);
+        return Ok(result);
     }
 }

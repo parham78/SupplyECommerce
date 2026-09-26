@@ -4,19 +4,21 @@ public class CheckoutService : ICheckoutService
 {
     private readonly OrderManagementDbContext _context;
     private readonly ICurrentUserService _currentUserService;
+    private readonly IStripePaymentService _stripePaymentService;
 
     public CheckoutService(
         OrderManagementDbContext context,
-        ICurrentUserService currentUserService)
+        ICurrentUserService currentUserService,
+        IStripePaymentService stripePaymentService)
     {
         _context = context;
         _currentUserService = currentUserService;
+        _stripePaymentService = stripePaymentService;
     }
 
-    public async Task<OrderResponseDto> Checkout(
-    CheckoutRequestDto dto)
+    public async Task<CheckoutResponseDto> Checkout(
+        CheckoutRequestDto dto)
     {
-        // 1. Who is making the request?
         var customerId =
             await _currentUserService.GetCustomerId();
 
@@ -26,11 +28,11 @@ public class CheckoutService : ICheckoutService
                 "No customer profile is linked to the current user.");
         }
 
-        // 2. Make sure the customer still exists and is active.
-        var customer = await _context.Customers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(c =>
-                c.Id == customerId.Value);
+        var customer =
+            await _context.Customers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(c =>
+                    c.Id == customerId.Value);
 
         if (customer == null)
         {
@@ -44,12 +46,95 @@ public class CheckoutService : ICheckoutService
                 "Inactive customers cannot checkout.");
         }
 
-        // 3. Load ONLY an address owned by this customer.
-        var address = await _context.Addresses
-            .AsNoTracking()
-            .FirstOrDefaultAsync(a =>
-                a.Id == dto.AddressId &&
-                a.CustomerId == customerId.Value);
+        // Find the customer's most recent successful payment.
+        //
+        // Any old abandoned Pending/Failed checkout that happened
+        // BEFORE this successful payment must not be resumed.
+        var lastSuccessfulPaymentDate =
+            await _context.Orders
+                .Where(o =>
+                    o.CustomerId == customerId.Value &&
+                    o.PaymentStatus == PaymentStatus.Succeeded)
+                .MaxAsync(o =>
+                    (DateTime?)o.PaidAt);
+
+        // -------------------------------------------------
+        // DUPLICATE CHECKOUT PROTECTION
+        // -------------------------------------------------
+        //
+        // Resume an unfinished checkout only when:
+        //
+        // 1. it belongs to this customer
+        // 2. the business order is still Pending
+        // 3. payment is Pending or Failed
+        // 4. it was created AFTER the customer's most recent
+        //    successful payment
+        //
+        // This prevents old abandoned orders from being reused.
+        var existingOrder =
+            await _context.Orders
+                .Include(o => o.OrderItems)
+                .Where(o =>
+                    o.CustomerId == customerId.Value &&
+                    o.Status == OrderStatus.Pending &&
+                    (
+                        o.PaymentStatus == PaymentStatus.Pending ||
+                        o.PaymentStatus == PaymentStatus.Failed
+                    ) &&
+                    (
+                        lastSuccessfulPaymentDate == null ||
+                        o.CreatedAt > lastSuccessfulPaymentDate
+                    ))
+                .OrderByDescending(o =>
+                    o.CreatedAt)
+                .FirstOrDefaultAsync();
+
+        if (existingOrder != null)
+        {
+            var existingPaymentIntent =
+                await _stripePaymentService
+                    .GetOrCreatePaymentIntentAsync(
+                        existingOrder);
+
+            if (
+                existingOrder.StripePaymentIntentId !=
+                existingPaymentIntent.Id)
+            {
+                existingOrder.StripePaymentIntentId =
+                    existingPaymentIntent.Id;
+
+                await _context.SaveChangesAsync();
+            }
+
+            if (string.IsNullOrWhiteSpace(
+                    existingPaymentIntent.ClientSecret))
+            {
+                throw new BadRequestException(
+                    "Stripe did not return a client secret for the existing checkout.");
+            }
+
+            return new CheckoutResponseDto
+            {
+                Order =
+                    MapOrderResponse(
+                        existingOrder,
+                        customer.Name),
+
+                ClientSecret =
+                    existingPaymentIntent.ClientSecret
+            };
+        }
+
+        // -------------------------------------------------
+        // NO ACTIVE CHECKOUT
+        // -------------------------------------------------
+
+        var address =
+            await _context.Addresses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a =>
+                    a.Id == dto.AddressId &&
+                    a.CustomerId == customerId.Value);
 
         if (address == null)
         {
@@ -57,15 +142,17 @@ public class CheckoutService : ICheckoutService
                 $"Address {dto.AddressId} was not found.");
         }
 
-        // 4. Load this customer's basket,
-        // its items, and each item's Product.
-        var basket = await _context.Baskets
-            .Include(b => b.Items)
-                .ThenInclude(bi => bi.Product)
-            .FirstOrDefaultAsync(b =>
-                b.CustomerId == customerId.Value);
+        var basket =
+            await _context.Baskets
+                .Include(b => b.Items)
+                    .ThenInclude(bi =>
+                        bi.Product)
+                .FirstOrDefaultAsync(b =>
+                    b.CustomerId == customerId.Value);
 
-        if (basket == null || basket.Items.Count == 0)
+        if (
+            basket == null ||
+            basket.Items.Count == 0)
         {
             throw new BadRequestException(
                 "Your basket is empty.");
@@ -73,7 +160,8 @@ public class CheckoutService : ICheckoutService
 
         foreach (var basketItem in basket.Items)
         {
-            var product = basketItem.Product;
+            var product =
+                basketItem.Product;
 
             if (!product.IsActive)
             {
@@ -81,115 +169,240 @@ public class CheckoutService : ICheckoutService
                     $"Product {product.Id} is no longer available.");
             }
 
-            if (basketItem.Quantity > product.Stock)
+            if (
+                basketItem.Quantity >
+                product.Stock)
             {
                 throw new BadRequestException(
                     $"Only {product.Stock} units of product {product.Id} are currently available.");
             }
         }
 
-        await using var transaction =
-    await _context.Database.BeginTransactionAsync();
+        Order order;
 
-        try
+        await using (
+            var transaction =
+                await _context.Database
+                    .BeginTransactionAsync())
         {
-            var order = new Order
+            try
             {
-                CustomerId = customerId.Value,
-                Status = OrderStatus.Pending,
-                CreatedAt = DateTime.UtcNow,
-
-                ShippingRecipientName = address.RecipientName,
-                ShippingAddressLine1 = address.AddressLine1,
-                ShippingAddressLine2 = address.AddressLine2,
-                ShippingCity = address.City,
-                ShippingProvince = address.Province,
-                ShippingPostalCode = address.PostalCode,
-                ShippingCountry = address.Country,
-                ShippingPhoneNumber = address.PhoneNumber
-            };
-
-            decimal totalPrice = 0;
-
-            foreach (var basketItem in basket.Items)
-            {
-                var product = basketItem.Product;
-
-                // Reduce real inventory.
-                product.Stock -= basketItem.Quantity;
-
-                // Snapshot product information into the order.
-                var orderItem = new OrderItem
-                {
-                    ProductId = product.Id,
-                    Quantity = basketItem.Quantity,
-                    UnitPrice = product.Price,
-                    ProductName = product.Name,
-                    ProductSku = product.Sku
-                };
-
-                order.OrderItems.Add(orderItem);
-
-                totalPrice +=
-                    basketItem.Quantity * product.Price;
-            }
-
-            order.TotalPrice = totalPrice;
-
-            _context.Orders.Add(order);
-
-            // Keep the Basket itself,
-            // but empty its items after successful checkout.
-            _context.BasketItems.RemoveRange(
-                basket.Items);
-
-            await _context.SaveChangesAsync();
-
-            await transaction.CommitAsync();
-
-            return new OrderResponseDto
-            {
-                Id = order.Id,
-                CustomerId = order.CustomerId,
-                CustomerName = customer.Name,
-                TotalPrice = order.TotalPrice,
-                Status = order.Status,
-                CreatedAt = order.CreatedAt,
-                ShippingRecipientName = order.ShippingRecipientName,
-                ShippingAddressLine1 = order.ShippingAddressLine1,
-                ShippingAddressLine2 = order.ShippingAddressLine2,
-                ShippingCity = order.ShippingCity,
-                ShippingProvince = order.ShippingProvince,
-                ShippingPostalCode = order.ShippingPostalCode,
-                ShippingCountry = order.ShippingCountry,
-                ShippingPhoneNumber = order.ShippingPhoneNumber,
-
-                Items = order.OrderItems
-                    .Select(oi => new OrderItemResponseDto
+                order =
+                    new Order
                     {
-                        Id = oi.Id,
-                        ProductId = oi.ProductId,
-                        ProductName = oi.ProductName,
-                        ProductSku = oi.ProductSku,
-                        Quantity = oi.Quantity,
-                        UnitPrice = oi.UnitPrice,
-                        LineTotal =
-                            oi.Quantity * oi.UnitPrice
-                    })
-                    .ToList()
-            };
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            await transaction.RollbackAsync();
+                        CustomerId =
+                            customerId.Value,
 
-            throw new ConcurrencyConflictException(
-                "Checkout failed because product stock changed. Please review your basket and try again.");
+                        Status =
+                            OrderStatus.Pending,
+
+                        PaymentStatus =
+                            PaymentStatus.Pending,
+
+                        CreatedAt =
+                            DateTime.UtcNow,
+
+                        ShippingRecipientName =
+                            address.RecipientName,
+
+                        ShippingAddressLine1 =
+                            address.AddressLine1,
+
+                        ShippingAddressLine2 =
+                            address.AddressLine2,
+
+                        ShippingCity =
+                            address.City,
+
+                        ShippingProvince =
+                            address.Province,
+
+                        ShippingPostalCode =
+                            address.PostalCode,
+
+                        ShippingCountry =
+                            address.Country,
+
+                        ShippingPhoneNumber =
+                            address.PhoneNumber
+                    };
+
+                decimal totalPrice = 0;
+
+                foreach (
+                    var basketItem
+                    in basket.Items)
+                {
+                    var product =
+                        basketItem.Product;
+
+                    product.Stock -=
+                        basketItem.Quantity;
+
+                    var orderItem =
+                        new OrderItem
+                        {
+                            ProductId =
+                                product.Id,
+
+                            Quantity =
+                                basketItem.Quantity,
+
+                            UnitPrice =
+                                product.Price,
+
+                            ProductName =
+                                product.Name,
+
+                            ProductSku =
+                                product.Sku
+                        };
+
+                    order.OrderItems.Add(
+                        orderItem);
+
+                    totalPrice +=
+                        basketItem.Quantity *
+                        product.Price;
+                }
+
+                order.TotalPrice =
+                    totalPrice;
+
+                _context.Orders.Add(
+                    order);
+
+                await _context
+                    .SaveChangesAsync();
+
+                await transaction
+                    .CommitAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                await transaction
+                    .RollbackAsync();
+
+                throw new ConcurrencyConflictException(
+                    "Checkout failed because product stock changed. Please review your basket and try again.");
+            }
+            catch
+            {
+                await transaction
+                    .RollbackAsync();
+
+                throw;
+            }
         }
-        catch
+
+        // The SQL transaction is already finished.
+        // Stripe is an external network call, so we do not
+        // hold the database transaction open while calling it.
+        var paymentIntent =
+            await _stripePaymentService
+                .GetOrCreatePaymentIntentAsync(
+                    order);
+
+        order.StripePaymentIntentId =
+            paymentIntent.Id;
+
+        await _context.SaveChangesAsync();
+
+        if (string.IsNullOrWhiteSpace(
+                paymentIntent.ClientSecret))
         {
-            await transaction.RollbackAsync();
-            throw;
+            throw new BadRequestException(
+                "Stripe did not return a client secret.");
         }
+
+        return new CheckoutResponseDto
+        {
+            Order =
+                MapOrderResponse(
+                    order,
+                    customer.Name),
+
+            ClientSecret =
+                paymentIntent.ClientSecret
+        };
+    }
+
+    private static OrderResponseDto MapOrderResponse(
+        Order order,
+        string customerName)
+    {
+        return new OrderResponseDto
+        {
+            Id =
+                order.Id,
+
+            CustomerId =
+                order.CustomerId,
+
+            CustomerName =
+                customerName,
+
+            TotalPrice =
+                order.TotalPrice,
+
+            Status =
+                order.Status,
+
+            CreatedAt =
+                order.CreatedAt,
+
+            ShippingRecipientName =
+                order.ShippingRecipientName,
+
+            ShippingAddressLine1 =
+                order.ShippingAddressLine1,
+
+            ShippingAddressLine2 =
+                order.ShippingAddressLine2,
+
+            ShippingCity =
+                order.ShippingCity,
+
+            ShippingProvince =
+                order.ShippingProvince,
+
+            ShippingPostalCode =
+                order.ShippingPostalCode,
+
+            ShippingCountry =
+                order.ShippingCountry,
+
+            ShippingPhoneNumber =
+                order.ShippingPhoneNumber,
+
+            Items =
+                order.OrderItems
+                    .Select(oi =>
+                        new OrderItemResponseDto
+                        {
+                            Id =
+                                oi.Id,
+
+                            ProductId =
+                                oi.ProductId,
+
+                            ProductName =
+                                oi.ProductName,
+
+                            ProductSku =
+                                oi.ProductSku,
+
+                            Quantity =
+                                oi.Quantity,
+
+                            UnitPrice =
+                                oi.UnitPrice,
+
+                            LineTotal =
+                                oi.Quantity *
+                                oi.UnitPrice
+                        })
+                    .ToList()
+        };
     }
 }

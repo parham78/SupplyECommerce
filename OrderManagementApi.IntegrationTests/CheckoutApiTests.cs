@@ -30,7 +30,7 @@ public class CheckoutApiTests
     }
 
     [Fact]
-    public async Task Checkout_WithValidBasket_CreatesOrderReducesStockAndClearsBasket()
+    public async Task Checkout_WithValidBasket_CreatesOrderReducesStockAndKeepsBasket()
     {
         // Arrange
         var (token, email) =
@@ -79,10 +79,15 @@ public class CheckoutApiTests
                 HttpStatusCode.OK,
                 checkoutResponse.StatusCode);
 
-            var orderResponse =
-    await checkoutResponse.Content
-        .ReadFromJsonAsync<OrderResponseDto>(
-            JsonOptions);
+            var checkout =
+                await checkoutResponse.Content
+                    .ReadFromJsonAsync<CheckoutResponseDto>(
+                        JsonOptions);
+
+            Assert.NotNull(checkout);
+            Assert.False(string.IsNullOrWhiteSpace(checkout.ClientSecret));
+
+            var orderResponse = checkout.Order;
 
             Assert.NotNull(orderResponse);
 
@@ -126,6 +131,13 @@ public class CheckoutApiTests
                 order.Status);
 
             Assert.Equal(
+                PaymentStatus.Pending,
+                order.PaymentStatus);
+
+            Assert.Null(order.PaidAt);
+            Assert.False(string.IsNullOrWhiteSpace(order.StripePaymentIntentId));
+
+            Assert.Equal(
                 "123 Integration Street",
                 order.ShippingAddressLine1);
 
@@ -165,8 +177,18 @@ public class CheckoutApiTests
                         b => b.CustomerId ==
                              order.CustomerId);
 
-            Assert.Empty(
-                basket.Items);
+            // Checkout reserves stock; the successful-payment webhook clears items.
+            var basketItem =
+                Assert.Single(
+                    basket.Items);
+
+            Assert.Equal(
+                productId,
+                basketItem.ProductId);
+
+            Assert.Equal(
+                3,
+                basketItem.Quantity);
         }
         finally
         {
