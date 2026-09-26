@@ -1,0 +1,32 @@
+<div class="payment">
+  @if (isLoading()) {
+    <p class="payment__status">Loading secure payment form...</p>
+  }
+
+  @if (errorMessage()) {
+    <p class="payment__error">
+      {{ errorMessage() }}
+    </p>
+  }
+
+  @if (successMessage()) {
+    <p class="payment__success">
+      {{ successMessage() }}
+    </p>
+  }
+
+  <div #paymentElement class="payment__element"></div>
+
+  <button
+    type="button"
+    class="payment__button"
+    [disabled]="isLoading() || isPaying()"
+    (click)="pay()"
+  >
+    @if (isPaying()) {
+      Processing payment...
+    } @else {
+      Pay now
+    }
+  </button>
+</div>
