@@ -57,4 +57,24 @@ public class StripePaymentService
                 requestOptions,
                 cancellationToken);
     }
+
+    public async Task<PaymentIntent>
+        GetOrCreatePaymentIntentAsync(
+            Order order,
+            CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(
+                order.StripePaymentIntentId))
+        {
+            return await _paymentIntentService
+                .GetAsync(
+                    order.StripePaymentIntentId,
+                    cancellationToken:
+                        cancellationToken);
+        }
+
+        return await CreatePaymentIntentAsync(
+            order,
+            cancellationToken);
+    }
 }
