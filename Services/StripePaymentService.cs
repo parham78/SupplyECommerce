@@ -44,10 +44,17 @@ public class StripePaymentService
                     }
             };
 
+        var requestOptions =
+            new RequestOptions
+            {
+                IdempotencyKey =
+                    $"supply-order-{order.Id}"
+            };
+
         return await _paymentIntentService
             .CreateAsync(
                 options,
-                cancellationToken:
-                    cancellationToken);
+                requestOptions,
+                cancellationToken);
     }
 }

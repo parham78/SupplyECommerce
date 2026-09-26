@@ -127,7 +127,39 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+if (app.Environment.IsDevelopment())
+{
+    app.MapPost(
+        "/api/dev/stripe-test/{orderId:int}",
+        async (
+            int orderId,
+            OrderManagementDbContext db,
+            StripePaymentService stripePaymentService,
+            CancellationToken cancellationToken) =>
+        {
+            var order = await db.Orders.FindAsync(
+                new object[] { orderId },
+                cancellationToken);
 
+            if (order == null)
+            {
+                return Results.NotFound();
+            }
+
+            var paymentIntent =
+                await stripePaymentService.CreatePaymentIntentAsync(
+                    order,
+                    cancellationToken);
+
+            return Results.Ok(new
+            {
+                paymentIntentId = paymentIntent.Id,
+                status = paymentIntent.Status,
+                amount = paymentIntent.Amount,
+                currency = paymentIntent.Currency
+            });
+        });
+}
 app.Run();
 public partial class Program
 {
