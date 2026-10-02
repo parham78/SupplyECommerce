@@ -1,0 +1,14 @@
+**/bin
+**/obj
+
+.git
+.gitignore
+
+.vs
+.vscode
+
+ECommerceWeb/node_modules
+ECommerceWeb/.angular
+
+OrderManagementApi.UnitTests
+OrderManagementApi.IntegrationTests
